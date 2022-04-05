@@ -1,9 +1,45 @@
-use crate::chunk::Chunk;
-use std::{convert::TryFrom, io::Read, io::ErrorKind};
+use crate::chunk::{Chunk, ChunkError};
+use std::{convert::TryFrom, io::Read};
+use std::error::Error;
+use std::fmt;
+use std::io;
 
+#[derive(Debug)]
 pub struct Png {
-
     chunks: Vec<Chunk>
+}
+
+#[derive(Debug)]
+pub enum PngError {
+    InvalidHeader,
+    ChunkTypeNotFound(String),
+    Chunk(ChunkError),
+    IO(io::Error)
+}
+
+impl fmt::Display for PngError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PngError::InvalidHeader => write!(f, "Header is invalid!"),
+            PngError::ChunkTypeNotFound(chunk_type) => write!(f, "Chunk type not found: {chunk_type}"),
+            PngError::Chunk(err) => write!(f, "ChunkError: {err}"),
+            PngError::IO(err) => write!(f, "IO Error: {err}")
+        }    
+    }
+}
+
+impl Error for PngError {}
+
+impl From<ChunkError> for PngError {
+    fn from(err: ChunkError) -> Self {
+        Self::Chunk(err)
+    }
+}
+
+impl From<io::Error> for PngError {
+    fn from(err: io::Error) -> Self {
+        Self::IO(err)
+    }
 }
 
 impl Png {
@@ -18,11 +54,11 @@ impl Png {
         self.chunks.push(chunk)
     }
 
-    pub fn remove_chunk(&mut self, chunk_type: &str) -> Result<Chunk, &'static str> {
+    pub fn remove_chunk(&mut self, chunk_type: &str) -> Result<Chunk, PngError> {
         let (idx, _) = self.chunks.iter()
             .enumerate()
             .find(|(_i, c)| c.chunk_type().to_string() == chunk_type)
-            .ok_or( "Chunk type not found")?;
+            .ok_or(PngError::ChunkTypeNotFound(chunk_type.to_owned()))?;
 
         Ok(self.chunks.remove(idx))
     }
@@ -49,14 +85,14 @@ impl Png {
 }
 
 impl TryFrom<&[u8]> for Png {
-    type Error = &'static str;
+    type Error = PngError;
 
     fn try_from(mut value: &[u8]) -> Result<Self, Self::Error> {
         let mut header_buffer: [u8; 8] = [0; 8];
-        value.read_exact(&mut header_buffer);
+        value.read_exact(&mut header_buffer)?;
 
         if header_buffer != Png::STANDARD_HEADER {
-            return Err("Invalid header found");
+            return Err(PngError::InvalidHeader);
         }
         let mut chunks = vec![];
 
@@ -74,11 +110,11 @@ impl TryFrom<&[u8]> for Png {
 
             let num_bytes_remaining = 8 + length as u64;
 
-            ref_reader.take(num_bytes_remaining).read_to_end(&mut chunk_bytes).unwrap();
+            ref_reader.take(num_bytes_remaining).read_to_end(&mut chunk_bytes)?;
 
-            let chunk = Chunk::try_from(&chunk_bytes[..]).unwrap();
+            let chunk = Chunk::try_from(&chunk_bytes[..])?;
 
-            let chunk_type = chunk.chunk_type().to_string();
+            // let chunk_type = chunk.chunk_type().to_string();
 
             chunks.push(chunk);
         }
@@ -90,7 +126,7 @@ impl TryFrom<&[u8]> for Png {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chunk_type::ChunkType;
+    use crate::chunk_type::{ChunkType, ChunkTypeError};
     use crate::chunk::Chunk;
     use std::str::FromStr;
     use std::convert::TryFrom;
@@ -110,8 +146,7 @@ mod tests {
         Png::from_chunks(chunks)
     }
 
-    fn chunk_from_strings(chunk_type: &str, data: &str) -> Result<Chunk, &'static str> {
-        use std::str::FromStr;
+    fn chunk_from_strings(chunk_type: &str, data: &str) -> Result<Chunk, ChunkTypeError> {
 
         let chunk_type = ChunkType::from_str(chunk_type)?;
         let data: Vec<u8> = data.bytes().collect();
@@ -146,7 +181,7 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_header() {
+    fn test_invalid_header() -> Result<(), String> {
         let chunk_bytes: Vec<u8> = testing_chunks()
             .into_iter()
             .flat_map(|chunk| chunk.as_bytes())
@@ -158,9 +193,12 @@ mod tests {
             .copied()
             .collect();
 
-        let png = Png::try_from(bytes.as_ref());
+        let png = Png::try_from(bytes.as_ref()).unwrap_err();
 
-        assert!(png.is_err());
+        if let PngError::InvalidHeader = png {
+            return Ok(())  
+        }
+        Err(String::from("Header is not invalid"))
     }
 
     #[test]

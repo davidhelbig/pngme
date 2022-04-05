@@ -31,12 +31,14 @@ pub struct DecodeArgs {
     pub chunk_type: String
 }
 
+/// Removes a chunk from a png file
 #[derive(Parser)]
 pub struct RemoveArgs {
     pub file: PathBuf,
     pub chunk_type: String
 }
 
+/// List all chunks in the given png file
 #[derive(Parser)]
 pub struct PrintArgs {
     pub file: PathBuf

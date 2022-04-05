@@ -1,6 +1,10 @@
 use crate::chunk_type::ChunkType;
+use crate::chunk_type::ChunkTypeError;
 use crc::{Crc, CRC_32_ISO_HDLC};
 use std::{convert::TryFrom, io::Read, string::FromUtf8Error};
+use std::error::Error;
+use std::fmt;
+
 
 #[derive(Debug)]
 pub struct Chunk {
@@ -9,6 +13,46 @@ pub struct Chunk {
     length: u32,
     crc: u32
 }
+
+#[derive(Debug)]
+pub enum ChunkError {
+    IO(std::io::Error),
+    Crc,
+    ChunkType(ChunkTypeError)
+}
+
+impl From<std::io::Error> for ChunkError {
+    fn from(err: std::io::Error) -> Self {
+        ChunkError::IO(err)
+    }
+}
+
+impl From<ChunkTypeError> for ChunkError {
+    fn from(err: ChunkTypeError) -> Self {
+        ChunkError::ChunkType(err)
+    }
+}
+
+impl fmt::Display for ChunkError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ChunkError::IO(err) => write!(f, "IO Error: {err}"),
+            ChunkError::Crc => write!(f, "CRC error while parsing chunk!"),
+            ChunkError::ChunkType(err) => write!(f, "Chunk Type error: {}", err)
+        }    
+    }
+}
+
+impl Error for ChunkError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            ChunkError::IO(err) => Some(err),
+            ChunkError::ChunkType(err) => Some(err),
+            _ => None
+        }
+    }
+}
+
 
 impl Chunk {
     pub fn new(chunk_type: ChunkType, data: Vec<u8>) -> Chunk {
@@ -50,29 +94,29 @@ impl Chunk {
 }
 
 impl TryFrom<&[u8]> for Chunk {
-    type Error = &'static str;
+    type Error = ChunkError;
 
     fn try_from(mut value: &[u8]) -> Result<Self, Self::Error> {
         let mut length_bytes = [0; 4];
-        value.read_exact(&mut length_bytes).unwrap();
+        value.read_exact(&mut length_bytes)?;
         let length = u32::from_be_bytes(length_bytes);
 
         let mut chunk_type_bytes = [0; 4];
-        value.read_exact(&mut chunk_type_bytes).unwrap();
-        let chunk_type = ChunkType::try_from(chunk_type_bytes).unwrap();
+        value.read_exact(&mut chunk_type_bytes)?;
+        let chunk_type = ChunkType::try_from(chunk_type_bytes)?;
 
         let mut data = vec![0_u8; length as usize];
-        value.read_exact(&mut data).unwrap();
+        value.read_exact(&mut data)?;
 
         let mut crc_bytes = [0; 4];
-        value.read_exact(&mut crc_bytes).unwrap();
+        value.read_exact(&mut crc_bytes)?;
         let crc_checksum = u32::from_be_bytes(crc_bytes);
 
         let crc = Crc::<u32>::new(&CRC_32_ISO_HDLC);
         let validation_checksum = crc.checksum(&[&chunk_type.bytes()[..], &data[..]].concat());
 
         if crc_checksum != validation_checksum {
-            return Err("CRC unsuccessful");
+            return Err(ChunkError::Crc);
         }
 
         Ok(Chunk {
